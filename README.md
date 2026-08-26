@@ -14,6 +14,87 @@ startup, and is fetched again by Pi's model refresh flow. The last successful
 catalogue is persisted by Pi's model store, so cached models remain available
 when a server is temporarily offline.
 
+## Install a release
+
+This is distributed as a Pi package through Git. npm publication is not
+required. Install a stable, immutable release tag globally:
+
+```bash
+pi install git:github.com/holygrolli/pi-openai-compatible-provider@v0.1.0
+```
+
+For a project-local installation, record the package in `.pi/settings.json`:
+
+```bash
+pi install git:github.com/holygrolli/pi-openai-compatible-provider@v0.1.0 -l
+```
+
+To try a release without adding it to settings:
+
+```bash
+pi -e git:github.com/holygrolli/pi-openai-compatible-provider@v0.1.0
+```
+
+Replace `v0.1.0` with a later release tag to upgrade a pinned installation.
+Review extension source before installing it: Pi extensions run with the full
+permissions of the Pi process. This package requires Node.js `>=22.19.0` and a
+compatible Pi installation.
+
+## Development and releases
+
+The repository uses Git-only releases. It remains marked `private` in
+`package.json` intentionally: there is no npm publishing workflow or npm
+registry credential.
+
+Pull requests must pass the CI workflow. Use Conventional Commit pull-request
+titles because Release Please uses the squash-merged title to determine the
+next version and changelog entry:
+
+| Title | Version impact |
+| --- | --- |
+| `fix: ...` | Patch release |
+| `feat: ...` | Minor release |
+| `feat!: ...` or a `BREAKING CHANGE:` footer | Major release |
+| `docs:`, `test:`, `ci:`, `chore:` | No release by default |
+
+After changes reach `main`, Release Please opens or updates one release PR.
+A maintainer reviews and merges that PR. Release Please then commits the
+version and `CHANGELOG.md`, creates the matching `vX.Y.Z` tag and GitHub
+Release, and the release workflow verifies that exact tag before attaching a
+package tarball and SHA-256 checksum.
+
+The release workflow authenticates through the same GitHub App pattern used
+by the maintainer's other repositories. Configure these repository secrets:
+
+- `TOKEN_APP_ID` — the GitHub App ID;
+- `TOKEN_APP_PRIVATE_KEY` — the App's PEM private key.
+
+The workflow creates a short-lived installation token with
+`tibdex/github-app-token` and passes it to Release Please and `gh`. This means
+generated release PRs, tags, and releases can trigger normal CI. The App must
+be installed on this repository with permission to read/write repository
+contents, issues, pull requests, and metadata. Enable the repository setting
+that allows GitHub Actions to create and approve pull requests if required.
+Never use an API key or provider credential for these secrets.
+
+For a local workflow check, install [`act`](https://github.com/nektos/act) and
+run the CI job with a runner image appropriate for the host architecture:
+
+```bash
+act pull_request -j test --matrix node-version:24.x \
+  -P ubuntu-latest=catthehacker/ubuntu:act-22.04
+
+# Validate the release workflow graph without calling GitHub or mutating tags
+act push -j release-please --dryrun \
+  -P ubuntu-latest=catthehacker/ubuntu:act-22.04
+```
+
+The release workflow's real Release Please/API execution should only be run by
+GitHub Actions with the configured release token. The first release must be
+bootstrapped deliberately: create `v0.1.0` from the reviewed initial-release
+commit, then let subsequent releases be managed by Release Please. Do not
+create a second `v0.1.0` release PR/tag.
+
 ## Run it
 
 From this directory, load it explicitly:

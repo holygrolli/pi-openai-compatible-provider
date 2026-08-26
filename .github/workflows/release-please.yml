@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Create or update release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub App token
+        id: generate-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.TOKEN_APP_ID }}
+          private_key: ${{ secrets.TOKEN_APP_PRIVATE_KEY }}
+
+      - name: Run Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # An installation token (rather than GITHUB_TOKEN) ensures that the
+          # generated release PR, tag, and release can trigger normal CI.
+          token: ${{ steps.generate-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Check out released tag
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag_name }}
+
+      - name: Set up Node.js for release verification
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+
+      - name: Install release dependencies
+        if: ${{ steps.release.outputs.release_created }}
+        run: npm ci
+
+      - name: Verify released package
+        id: verify
+        if: ${{ steps.release.outputs.release_created }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${TAG_NAME#v}"
+          package_version="$(npm pkg get version --raw)"
+          test "$package_version" = "$tag_version"
+          npm test
+          npm run check
+          npm run check:package
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.3
+          PI_OFFLINE=1 pi -e . --list-models
+          package_file="$(npm pack --silent)"
+          sha256sum "$package_file" > "$package_file.sha256"
+          printf 'package_file=%s\n' "$package_file" >> "$GITHUB_OUTPUT"
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+
+      - name: Attach package artifact to GitHub Release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          PACKAGE_FILE: ${{ steps.verify.outputs.package_file }}
+        run: gh release upload "$TAG_NAME" "$PACKAGE_FILE" "$PACKAGE_FILE.sha256"
+
+      - name: Explain release state
+        if: ${{ always() }}
+        env:
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          RELEASES_CREATED: ${{ steps.release.outputs.releases_created }}
+          PRS_CREATED: ${{ steps.release.outputs.prs_created }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          printf 'release_created=%s\n' "$RELEASE_CREATED"
+          printf 'releases_created=%s\n' "$RELEASES_CREATED"
+          printf 'prs_created=%s\n' "$PRS_CREATED"
+          printf 'tag_name=%s\n' "$TAG_NAME"
+          printf 'version=%s\n' "$VERSION"
