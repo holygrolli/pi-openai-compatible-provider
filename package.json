@@ -3,6 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "description": "Pi extension with dynamic OpenAI-compatible model discovery",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holygrolli/pi-openai-compatible-provider.git"
+  },
+  "homepage": "https://github.com/holygrolli/pi-openai-compatible-provider#readme",
+  "bugs": {
+    "url": "https://github.com/holygrolli/pi-openai-compatible-provider/issues"
+  },
+  "files": [
+    "index.ts",
+    "model-catalog.ts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -13,7 +29,8 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test.ts",
-    "check": "node --experimental-strip-types --check index.ts && node --experimental-strip-types --check model-catalog.ts"
+    "check": "node --experimental-strip-types --check index.ts && node --experimental-strip-types --check model-catalog.ts",
+    "check:package": "node scripts/check-package.mjs"
   },
   "keywords": [
     "pi-package",
