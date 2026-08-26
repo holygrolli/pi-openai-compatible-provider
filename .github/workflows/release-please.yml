@@ -19,14 +19,20 @@ jobs:
     name: Create or update release PR
     runs-on: ubuntu-latest
     steps:
+      - name: Create GitHub App token
+        id: generate-token
+        uses: tibdex/github-app-token@v2
+        with:
+          app_id: ${{ secrets.TOKEN_APP_ID }}
+          private_key: ${{ secrets.TOKEN_APP_PRIVATE_KEY }}
+
       - name: Run Release Please
         id: release
         uses: googleapis/release-please-action@v4
         with:
-          # Use a PAT or GitHub App token so the generated release PR and
-          # release commit can trigger the normal CI workflow. Configure this
-          # repository secret before enabling releases.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          # An installation token (rather than GITHUB_TOKEN) ensures that the
+          # generated release PR, tag, and release can trigger normal CI.
+          token: ${{ steps.generate-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -69,7 +75,7 @@ jobs:
       - name: Attach package artifact to GitHub Release
         if: ${{ steps.release.outputs.release_created }}
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
           PACKAGE_FILE: ${{ steps.verify.outputs.package_file }}
         run: gh release upload "$TAG_NAME" "$PACKAGE_FILE" "$PACKAGE_FILE.sha256"

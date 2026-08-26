@@ -63,11 +63,19 @@ version and `CHANGELOG.md`, creates the matching `vX.Y.Z` tag and GitHub
 Release, and the release workflow verifies that exact tag before attaching a
 package tarball and SHA-256 checksum.
 
-The release workflow uses a `RELEASE_PLEASE_TOKEN` GitHub Actions secret (a
-suitable PAT or GitHub App token) so that generated release PRs and release
-commits can trigger normal CI. Configure that secret and allow GitHub Actions
-to create pull requests before enabling releases. Never use an API key or
-provider credential for this secret.
+The release workflow authenticates through the same GitHub App pattern used
+by the maintainer's other repositories. Configure these repository secrets:
+
+- `TOKEN_APP_ID` — the GitHub App ID;
+- `TOKEN_APP_PRIVATE_KEY` — the App's PEM private key.
+
+The workflow creates a short-lived installation token with
+`tibdex/github-app-token` and passes it to Release Please and `gh`. This means
+generated release PRs, tags, and releases can trigger normal CI. The App must
+be installed on this repository with permission to read/write repository
+contents, issues, pull requests, and metadata. Enable the repository setting
+that allows GitHub Actions to create and approve pull requests if required.
+Never use an API key or provider credential for these secrets.
 
 For a local workflow check, install [`act`](https://github.com/nektos/act) and
 run the CI job with a runner image appropriate for the host architecture:
