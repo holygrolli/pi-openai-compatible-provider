@@ -114,40 +114,82 @@ pi install ./ -l
 The root URL and `/v1` form are both accepted. The extension normalizes either
 form and makes the model request at exactly `/v1/models`.
 
-### Requesty EU example
+### Multiple OpenAI-compatible providers
 
-Do not put an API key in this repository. Set it in the environment (or use
-`/login openai-compatible`):
+Use `OPENAI_COMPATIBLE_PROVIDERS` to configure independent upstream instances.
+The list is explicit and its order is retained during registration; keys are
+case-insensitive stable identifiers containing only letters, numbers, `_`, and
+`-`.
 
 ```bash
-export REQUESTY_API_KEY='your-requesty-key'
-export OPENAI_COMPATIBLE_BASE_URL='https://router.eu.requesty.ai'
+export OPENAI_COMPATIBLE_PROVIDERS='requesty,local'
 
-# `auto` honors an explicit responses API marker in a model record; otherwise
-# it uses Chat Completions. Use `openai-responses` to force Responses for all
-# discovered models.
-export OPENAI_COMPATIBLE_API='auto'
+export OPENAI_COMPATIBLE_REQUESTY_BASE_URL='https://router.eu.requesty.ai/v1'
+export OPENAI_COMPATIBLE_REQUESTY_API_KEY='your-requesty-key'
+export OPENAI_COMPATIBLE_REQUESTY_API='auto'
+export OPENAI_COMPATIBLE_REQUESTY_NAME='Requesty EU'
+
+export OPENAI_COMPATIBLE_LOCAL_BASE_URL='http://localhost:4000/v1'
+export OPENAI_COMPATIBLE_LOCAL_API_KEY='your-local-key'
+export OPENAI_COMPATIBLE_LOCAL_API='openai-completions'
+export OPENAI_COMPATIBLE_LOCAL_NAME='Local LiteLLM'
+
+pi -e ./index.ts --list-models
+```
+
+Every named group supports the following variables. `NAME` is optional; URL
+host, port, and non-`/v1` path are used for the default display label.
+
+| Purpose | Variable |
+| --- | --- |
+| Provider display label | `OPENAI_COMPATIBLE_<KEY>_NAME` |
+| Base URL | `OPENAI_COMPATIBLE_<KEY>_BASE_URL` |
+| API mode | `OPENAI_COMPATIBLE_<KEY>_API` |
+| API key | `OPENAI_COMPATIBLE_<KEY>_API_KEY` |
+| Discovery timeout | `OPENAI_COMPATIBLE_<KEY>_MODEL_TIMEOUT_MS` |
+| Default context window | `OPENAI_COMPATIBLE_<KEY>_CONTEXT_WINDOW` |
+| Default max output | `OPENAI_COMPATIBLE_<KEY>_MAX_TOKENS` |
+| Default reasoning | `OPENAI_COMPATIBLE_<KEY>_DEFAULT_REASONING` |
+| Default input | `OPENAI_COMPATIBLE_<KEY>_DEFAULT_INPUT` |
+| Capability inference | `OPENAI_COMPATIBLE_<KEY>_INFER_CAPABILITIES` |
+| Debug logging | `OPENAI_COMPATIBLE_<KEY>_DEBUG` |
+
+The **instance key** (`requesty`) is the stable configuration and persistence
+identity. Pi's **provider ID** is derived from it (`openai-compatible-requesty`)
+and is the selector, credential, and model-cache boundary. The **display name**
+(`Requesty EU`) is only the human-facing label. Keep the instance key stable:
+changing it creates a new Pi provider identity, credential slot, and model
+cache. Remote model IDs are not rewritten, so two providers may expose the
+same ID safely:
+
+```text
+/model openai-compatible-requesty/vertex/claude-sonnet-4-5
+/model openai-compatible-local/vertex/claude-sonnet-4-5
+/login openai-compatible-requesty
+/login openai-compatible-local
+```
+
+Keep the instance key stable: it is part of the provider identity and model
+cache boundary. Do not put API keys in this repository, shell scripts
+committed to it, or package settings.
+
+### Requesty EU example
+
+Do not put an API key in this repository. Set it in the scoped environment:
+
+```bash
+export OPENAI_COMPATIBLE_PROVIDERS='requesty'
+export OPENAI_COMPATIBLE_REQUESTY_BASE_URL='https://router.eu.requesty.ai/v1'
+export OPENAI_COMPATIBLE_REQUESTY_API_KEY='your-requesty-key'
+export OPENAI_COMPATIBLE_REQUESTY_API='auto'
 pi -e ./index.ts --list-models
 ```
 
 Requesty documents the EU OpenAI-compatible base URL as
-`https://router.eu.requesty.ai/v1`. The extension's default is that endpoint,
-so setting `OPENAI_COMPATIBLE_BASE_URL` is optional for Requesty. The key is
-never written to the provider config, model store, or session.
-
-To use the Responses API explicitly:
-
-```bash
-OPENAI_COMPATIBLE_API=openai-responses \
-  pi -e ./index.ts --model openai-compatible/<model-id> "Say hello"
-```
-
-To use Chat Completions explicitly:
-
-```bash
-OPENAI_COMPATIBLE_API=openai-completions \
-  pi -e ./index.ts --model openai-compatible/<model-id> "Say hello"
-```
+`https://router.eu.requesty.ai/v1`. Set it explicitly when using the named
+configuration. To use the Responses API explicitly, set
+`OPENAI_COMPATIBLE_REQUESTY_API=openai-responses`; use
+`openai-completions` for Chat Completions.
 
 `chat`, `chat-completions`, `completions`, `responses`, `response`, `both`, and
 `mixed` are accepted aliases. `both`/`mixed` are aliases for `auto`.
@@ -155,40 +197,36 @@ OPENAI_COMPATIBLE_API=openai-completions \
 ## LiteLLM and self-hosted servers
 
 ```bash
-export OPENAI_COMPATIBLE_BASE_URL='http://localhost:4000/v1'
-export OPENAI_COMPATIBLE_API_KEY='your-local-or-litellm-key'
-export OPENAI_COMPATIBLE_API='openai-completions'
+export OPENAI_COMPATIBLE_PROVIDERS='local'
+export OPENAI_COMPATIBLE_LOCAL_BASE_URL='http://localhost:4000/v1'
+export OPENAI_COMPATIBLE_LOCAL_API_KEY='your-local-or-litellm-key'
+export OPENAI_COMPATIBLE_LOCAL_API='openai-completions'
 pi -e ./index.ts --list-models
 ```
 
-If the configured URL has no `/v1` suffix, `/v1` is added automatically. The
-following environment variables are recognized:
-
-| Purpose | Variables (first non-empty value wins) |
-| --- | --- |
-| Base URL | `PI_CUSTOM_PROVIDER_BASE_URL`, `OPENAI_COMPATIBLE_BASE_URL`, `CUSTOM_PROVIDER_BASE_URL`, `CUSTOM_OPENAI_BASE_URL`, `REQUESTY_BASE_URL`, `OPENAI_BASE_URL` |
-| API mode | `PI_CUSTOM_PROVIDER_API`, `OPENAI_COMPATIBLE_API`, `CUSTOM_PROVIDER_API`, `REQUESTY_API` |
-| API key | `PI_CUSTOM_PROVIDER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `REQUESTY_API_KEY`, `CUSTOM_PROVIDER_API_KEY`, `CUSTOM_OPENAI_API_KEY` |
-| Discovery timeout | `PI_CUSTOM_PROVIDER_MODEL_TIMEOUT_MS`, `OPENAI_COMPATIBLE_MODEL_TIMEOUT_MS` |
-| Default context window | `PI_CUSTOM_PROVIDER_CONTEXT_WINDOW`, `OPENAI_COMPATIBLE_CONTEXT_WINDOW` |
-| Default max output | `PI_CUSTOM_PROVIDER_MAX_TOKENS`, `OPENAI_COMPATIBLE_MAX_TOKENS` |
-
-The extension also accepts `PI_CUSTOM_PROVIDER_DEFAULT_REASONING`,
-`OPENAI_COMPATIBLE_DEFAULT_REASONING`,
-`PI_CUSTOM_PROVIDER_DEFAULT_INPUT`, and the corresponding capability-inference
-flags for model-list implementations that return only `{ id }`.
+If the configured URL has no `/v1` suffix, `/v1` is added automatically. Only
+`OPENAI_COMPATIBLE_PROVIDERS` and its scoped
+`OPENAI_COMPATIBLE_<KEY>_*` variables are recognized; there is no unsuffixed
+or unsuffixed environment-variable fallback.
 
 ## Dynamic refresh
 
 The initial asynchronous fetch makes models available to `--list-models`.
-Pi also refreshes the provider when the model selector opens. In an interactive
-session, use:
+Pi also refreshes the provider when the model selector opens. In an interactive session, use the aggregate command to refresh every
+configured upstream, or pass an instance key/provider ID to target one:
 
 ```text
 /refresh-openai-compatible-models
+/refresh-openai-compatible-models local
+/refresh-openai-compatible-models openai-compatible-requesty
 ```
 
-That command forces a fresh request and reports the number of loaded models.
+The command reports each provider's display name, provider ID, endpoint, model
+count, and independent errors. A failed or offline endpoint does not prevent a
+healthy provider from starting or refreshing. Each provider keeps its own last
+successful Pi model-store catalogue, so cached models remain usable when its
+endpoint is temporarily unavailable. `PI_OFFLINE=1` and `pi --offline` skip
+network discovery for all instances.
 The extension honors `PI_OFFLINE=1` and `pi --offline`, skips network discovery,
 and uses any previously persisted catalogue.
 

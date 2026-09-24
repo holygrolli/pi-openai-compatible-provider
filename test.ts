@@ -11,8 +11,16 @@ import {
   normalizeBaseUrl,
   parseApiMode,
   parseModelCatalog,
-  readEnvironmentConfig,
+  displayNameFromBaseUrl,
+  providerIdForInstance,
+  readEnvironmentConfigs,
 } from "./model-catalog.ts";
+import {
+  createOpenAICompatibleProvider,
+  restoreStoredModels,
+  selectProviderConfigs,
+  toPiModel,
+} from "./index.ts";
 
 async function startServer(
   handler: (request: IncomingMessage, response: ServerResponse) => void,
@@ -54,13 +62,15 @@ test("accepts the documented API mode aliases", () => {
   assert.throws(() => parseApiMode("not-an-api"), /Invalid OpenAI-compatible API/);
 });
 
-test("reads configurable base URL, API mode, and custom key names", () => {
-  const config = readEnvironmentConfig({
-    PI_CUSTOM_PROVIDER_BASE_URL: "http://localhost:4000/",
-    PI_CUSTOM_PROVIDER_API: "responses",
-    CUSTOM_PROVIDER_API_KEY: "test-key",
-    PI_CUSTOM_PROVIDER_MODEL_TIMEOUT_MS: "2500",
-  });
+test("requires the provider list and reads scoped configuration", () => {
+  assert.throws(() => readEnvironmentConfigs({}), /OPENAI_COMPATIBLE_PROVIDERS is required/);
+  const config = readEnvironmentConfigs({
+    OPENAI_COMPATIBLE_PROVIDERS: "local",
+    OPENAI_COMPATIBLE_LOCAL_BASE_URL: "http://localhost:4000/",
+    OPENAI_COMPATIBLE_LOCAL_API: "responses",
+    OPENAI_COMPATIBLE_LOCAL_API_KEY: "test-key",
+    OPENAI_COMPATIBLE_LOCAL_MODEL_TIMEOUT_MS: "2500",
+  })[0]!;
 
   assert.equal(config.baseUrl, "http://localhost:4000/v1");
   assert.equal(config.api, "openai-responses");
@@ -161,6 +171,109 @@ test("supports mixed/Responses selection and conservative defaults", () => {
   assert.equal(models[0]?.maxTokens, DEFAULT_MAX_TOKENS);
   assert.deepEqual(models[0]?.input, ["text"]);
   assert.equal(models[0]?.reasoning, false);
+});
+
+test("reads named provider groups in order without unsuffixed fallback", () => {
+  const configs = readEnvironmentConfigs({
+    OPENAI_COMPATIBLE_PROVIDERS: " Requesty, local ",
+    OPENAI_COMPATIBLE_REQUESTY_BASE_URL: "https://router.eu.requesty.ai/v1",
+    OPENAI_COMPATIBLE_REQUESTY_API_KEY: "requesty-key",
+    OPENAI_COMPATIBLE_REQUESTY_API: "auto",
+    OPENAI_COMPATIBLE_REQUESTY_NAME: "Requesty EU",
+    OPENAI_COMPATIBLE_LOCAL_BASE_URL: "http://localhost:4000",
+    OPENAI_COMPATIBLE_LOCAL_API_KEY: "local-key",
+    OPENAI_COMPATIBLE_LOCAL_API: "responses",
+    OPENAI_COMPATIBLE_LOCAL_CONTEXT_WINDOW: "32768",
+  });
+
+  assert.deepEqual(configs.map((config) => config.instanceKey), ["requesty", "local"]);
+  assert.deepEqual(configs.map((config) => config.providerId), [
+    "openai-compatible-requesty",
+    "openai-compatible-local",
+  ]);
+  assert.equal(configs[0]?.displayName, "Requesty EU");
+  assert.equal(configs[0]?.api, "auto");
+  assert.equal(configs[0]?.apiKey, "requesty-key");
+  assert.deepEqual(configs[0]?.apiKeyEnvVars, ["OPENAI_COMPATIBLE_REQUESTY_API_KEY"]);
+  assert.equal(configs[1]?.api, "openai-responses");
+  assert.equal(configs[1]?.defaultContextWindow, 32768);
+  assert.equal(configs[1]?.apiKey, "local-key");
+  assert.equal(configs[1]?.displayName, "localhost:4000");
+  assert.equal(readEnvironmentConfigs({
+    OPENAI_COMPATIBLE_PROVIDERS: "local",
+    OPENAI_COMPATIBLE_LOCAL_BASE_URL: "http://localhost:4000",
+    OPENAI_COMPATIBLE_API_KEY: "wrong-unsuffixed-key",
+  })[0]?.apiKey, undefined);
+  assert.equal(readEnvironmentConfigs({
+    OPENAI_COMPATIBLE_PROVIDERS: "default,local",
+    OPENAI_COMPATIBLE_DEFAULT_BASE_URL: "https://default.example/v1",
+    OPENAI_COMPATIBLE_LOCAL_BASE_URL: "http://localhost:4000/v1",
+    OPENAI_COMPATIBLE_LOCAL_API_KEY: "local-key",
+  })[0]?.apiKey, undefined);
+});
+
+test("derives deterministic identities and validates named configuration", () => {
+  const config = readEnvironmentConfigs({
+    OPENAI_COMPATIBLE_PROVIDERS: "default",
+    OPENAI_COMPATIBLE_DEFAULT_BASE_URL: "https://example.com/custom/v1",
+  })[0]!;
+  assert.equal(config.providerId, "openai-compatible-default");
+  assert.equal(config.displayName, "example.com/custom");
+  assert.equal(providerIdForInstance("My_Local"), "openai-compatible-my_local");
+  assert.equal(displayNameFromBaseUrl("https://example.com:8443/custom/v1"), "example.com:8443/custom");
+  assert.throws(() => readEnvironmentConfigs({ OPENAI_COMPATIBLE_PROVIDERS: "a,a", OPENAI_COMPATIBLE_A_BASE_URL: "https://a.example" }), /Duplicate/);
+  assert.throws(() => readEnvironmentConfigs({ OPENAI_COMPATIBLE_PROVIDERS: "a,b", OPENAI_COMPATIBLE_A_BASE_URL: "https://a.example", OPENAI_COMPATIBLE_B_BASE_URL: "https://b.example", OPENAI_COMPATIBLE_A_NAME: "Same", OPENAI_COMPATIBLE_B_NAME: "Same" }), /Duplicate display NAME/);
+  const sameHost = readEnvironmentConfigs({ OPENAI_COMPATIBLE_PROVIDERS: "a,b", OPENAI_COMPATIBLE_A_BASE_URL: "https://same.example/v1", OPENAI_COMPATIBLE_B_BASE_URL: "https://same.example/v1" });
+  assert.deepEqual(sameHost.map((config) => config.displayName), ["same.example (a)", "same.example (b)"]);
+  assert.throws(() => readEnvironmentConfigs({ OPENAI_COMPATIBLE_PROVIDERS: "bad.key", "OPENAI_COMPATIBLE_BAD.KEY_BASE_URL": "https://bad.example" }), /Invalid/);
+});
+
+test("isolates provider identities, models, auth environment names, and refresh selection", async () => {
+  const configs = readEnvironmentConfigs({
+    OPENAI_COMPATIBLE_PROVIDERS: "a,b",
+    OPENAI_COMPATIBLE_A_BASE_URL: "https://a.example/v1",
+    OPENAI_COMPATIBLE_A_API_KEY: "a-key",
+    OPENAI_COMPATIBLE_B_BASE_URL: "https://b.example/v1",
+    OPENAI_COMPATIBLE_B_API_KEY: "b-key",
+  });
+  const aModel = toPiModel({
+    id: "shared-model",
+    name: "A shared",
+    api: "openai-completions",
+    baseUrl: configs[0]!.baseUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100,
+    maxTokens: 10,
+  }, configs[0]!.providerId);
+  const bModel = toPiModel({ ...aModel, name: "B shared", baseUrl: configs[1]!.baseUrl }, configs[1]!.providerId);
+  const providerA = createOpenAICompatibleProvider(configs[0]!, [aModel]);
+  const providerB = createOpenAICompatibleProvider(configs[1]!, [bModel]);
+  assert.notEqual(providerA.id, providerB.id);
+  assert.equal(providerA.baseUrl, configs[0]!.baseUrl);
+  assert.equal(providerB.baseUrl, configs[1]!.baseUrl);
+  assert.deepEqual(providerA.getModels().map((model) => [model.provider, model.id]), [[configs[0]!.providerId, "shared-model"]]);
+  assert.deepEqual(providerB.getModels().map((model) => [model.provider, model.id]), [[configs[1]!.providerId, "shared-model"]]);
+  const restoredA = restoreStoredModels({
+    models: [aModel, bModel],
+    checkedAt: 1,
+  }, configs[0]!, configs[0]!.providerId);
+  assert.deepEqual(restoredA.map((model) => [model.provider, model.id, model.baseUrl]), [[configs[0]!.providerId, "shared-model", configs[0]!.baseUrl]]);
+  const authSignal = new AbortController().signal;
+  const authA = await providerA.auth!.apiKey!.resolve({
+    ctx: { env: async (name) => name, fileExists: async () => false },
+    signal: authSignal,
+  });
+  const authB = await providerB.auth!.apiKey!.resolve({
+    ctx: { env: async (name) => name, fileExists: async () => false },
+    signal: authSignal,
+  });
+  assert.equal(authA?.auth.apiKey, "OPENAI_COMPATIBLE_A_API_KEY");
+  assert.equal(authB?.auth.apiKey, "OPENAI_COMPATIBLE_B_API_KEY");
+  assert.deepEqual(selectProviderConfigs(configs), configs);
+  assert.deepEqual(selectProviderConfigs(configs, "b"), [configs[1]]);
+  assert.deepEqual(selectProviderConfigs(configs, "openai-compatible-a"), [configs[0]]);
 });
 
 test("maps common LiteLLM/self-hosted fields and ignores malformed duplicates", () => {

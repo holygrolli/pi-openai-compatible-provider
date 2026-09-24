@@ -25,28 +25,29 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import {
-  API_KEY_ENV_VARS,
   type CatalogOptions,
   type DiscoveredModel,
-  type EnvironmentConfig,
+  type ProviderEnvironmentConfig,
   fetchOpenAICompatibleCatalog,
-  isDebugEnabled,
   isOffline,
   modelsEndpoint,
-  readEnvironmentConfig,
+  readEnvironmentConfigs,
 } from "./model-catalog.ts";
 
-export const PROVIDER_ID = "openai-compatible";
-export const PROVIDER_NAME = "OpenAI-compatible (dynamic)";
-
-export type { ApiMode, CatalogOptions, DiscoveredModel, EnvironmentConfig } from "./model-catalog.ts";
+export type {
+  ApiMode,
+  CatalogOptions,
+  DiscoveredModel,
+  ProviderEnvironmentConfig,
+  ProviderIdentity,
+} from "./model-catalog.ts";
 export {
   DEFAULT_API,
-  DEFAULT_REQUESTY_BASE_URL,
   fetchOpenAICompatibleCatalog,
   modelsEndpoint,
   parseApiMode,
-  readEnvironmentConfig,
+  providerIdForInstance,
+  readEnvironmentConfigs,
 } from "./model-catalog.ts";
 
 const API_IMPLEMENTATIONS: Record<
@@ -61,12 +62,15 @@ function isSupportedApi(value: unknown): value is "openai-completions" | "openai
   return value === "openai-completions" || value === "openai-responses";
 }
 
-function toPiModel(discovered: DiscoveredModel): Model<"openai-completions" | "openai-responses"> {
+export function toPiModel(
+  discovered: DiscoveredModel,
+  providerId: string,
+): Model<"openai-completions" | "openai-responses"> {
   return {
     id: discovered.id,
     name: discovered.name,
     api: discovered.api,
-    provider: PROVIDER_ID,
+    provider: providerId,
     baseUrl: discovered.baseUrl,
     reasoning: discovered.reasoning,
     input: discovered.input,
@@ -77,21 +81,22 @@ function toPiModel(discovered: DiscoveredModel): Model<"openai-completions" | "o
   } as Model<"openai-completions" | "openai-responses">;
 }
 
-function restoreStoredModels(
+export function restoreStoredModels(
   stored: RefreshModelsContext["stored"],
-  config: EnvironmentConfig,
+  config: ProviderEnvironmentConfig,
+  providerId: string,
 ): Model<"openai-completions" | "openai-responses">[] {
   if (!stored) return [];
 
   const restored: Model<"openai-completions" | "openai-responses">[] = [];
   const seen = new Set<string>();
   for (const storedModel of stored.models) {
-    if (storedModel.provider !== PROVIDER_ID || typeof storedModel.id !== "string") continue;
+    if (storedModel.provider !== providerId || typeof storedModel.id !== "string") continue;
     if (seen.has(storedModel.id)) continue;
     seen.add(storedModel.id);
 
     // A fixed API selection is intentionally applied to cached records too.
-    // This makes changing OPENAI_COMPATIBLE_API take effect immediately rather
+    // This makes changing the scoped API mode environment variable take effect immediately rather
     // than waiting for a network refresh.  `auto` preserves a cached model's
     // API when it is one of the two APIs this provider owns.
     const api =
@@ -103,14 +108,18 @@ function restoreStoredModels(
     restored.push({
       ...(storedModel as Model<Api>),
       api,
-      provider: PROVIDER_ID,
+      provider: providerId,
       baseUrl: config.baseUrl,
     } as Model<"openai-completions" | "openai-responses">);
   }
   return restored;
 }
 
-function catalogOptions(config: EnvironmentConfig): CatalogOptions {
+function providerConfig(config: ProviderEnvironmentConfig): ProviderEnvironmentConfig {
+  return config;
+}
+
+function catalogOptions(config: ProviderEnvironmentConfig): CatalogOptions {
   return {
     baseUrl: config.baseUrl,
     api: config.api,
@@ -128,18 +137,22 @@ function catalogOptions(config: EnvironmentConfig): CatalogOptions {
  * selector and persist the last successful catalogue.
  */
 export function createOpenAICompatibleProvider(
-  config: EnvironmentConfig,
+  inputConfig: ProviderEnvironmentConfig,
   initialModels: readonly DiscoveredModel[] = [],
 ): Provider<"openai-completions" | "openai-responses"> {
-  let models = initialModels.map(toPiModel);
+  const config = providerConfig(inputConfig);
+  let models = initialModels.map((model) => toPiModel(model, config.providerId));
   const discoveryOptions = catalogOptions(config);
 
   const provider: Provider<"openai-completions" | "openai-responses"> = {
-    id: PROVIDER_ID,
-    name: PROVIDER_NAME,
+    id: config.providerId,
+    name: config.displayName,
     baseUrl: config.baseUrl,
     auth: {
-      apiKey: envApiKeyAuth("OpenAI-compatible API key", API_KEY_ENV_VARS),
+      apiKey: envApiKeyAuth(
+        `${config.displayName} API key`,
+        config.apiKeyEnvVars,
+      ),
     },
     getModels: () => models,
 
@@ -148,7 +161,7 @@ export function createOpenAICompatibleProvider(
       // offline and gives the model selector something to display while a
       // fresh request is in flight.
       if (context.stored) {
-        const restored = restoreStoredModels(context.stored, config);
+        const restored = restoreStoredModels(context.stored, config, config.providerId);
         const published = await context.publish({
           update: () => {
             models = restored;
@@ -167,7 +180,7 @@ export function createOpenAICompatibleProvider(
         timeoutMs: config.timeoutMs,
       });
       context.signal.throwIfAborted();
-      const nextModels = refreshed.map(toPiModel);
+      const nextModels = refreshed.map((model) => toPiModel(model, config.providerId));
       await context.publish({
         persist: {
           models: nextModels,
@@ -201,7 +214,7 @@ export function createOpenAICompatibleProvider(
   return provider;
 }
 
-async function discoverInitialModels(config: EnvironmentConfig): Promise<DiscoveredModel[]> {
+async function discoverInitialModels(config: ProviderEnvironmentConfig): Promise<DiscoveredModel[]> {
   if (isOffline()) return [];
 
   try {
@@ -211,41 +224,57 @@ async function discoverInitialModels(config: EnvironmentConfig): Promise<Discove
       timeoutMs: config.timeoutMs,
     });
   } catch (error) {
-    // A failed first request must not prevent Pi from starting: the provider's
-    // refreshModels callback can retry from /model or the command below.  Do
-    // not log by default because an unavailable local endpoint is normal for
-    // users who configure this extension globally.
-    if (isDebugEnabled()) {
+    // A failed first request must not prevent Pi from starting. Each instance
+    // owns its failure and can retry independently through refreshModels.
+    if (config.debug) {
       console.warn(
-        `[${PROVIDER_ID}] initial model discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+        `[${config.providerId}] initial model discovery failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     return [];
   }
 }
 
-function registerRefreshCommand(pi: ExtensionAPI, config: EnvironmentConfig): void {
+export function selectProviderConfigs(
+  configs: readonly ProviderEnvironmentConfig[],
+  selector?: string,
+): ProviderEnvironmentConfig[] {
+  const value = selector?.trim();
+  if (!value) return [...configs];
+  return configs.filter((config) => config.instanceKey === value.toLowerCase() || config.providerId === value);
+}
+
+function registerRefreshCommand(pi: ExtensionAPI, configs: readonly ProviderEnvironmentConfig[]): void {
   pi.registerCommand("refresh-openai-compatible-models", {
-    description: "Refresh the dynamic OpenAI-compatible /v1/models catalogue",
-    handler: async (_args, ctx) => {
-      const signal = AbortSignal.timeout(config.timeoutMs);
+    description: "Refresh all OpenAI-compatible catalogues, or one instance by key/provider ID",
+    handler: async (args, ctx) => {
+      const selector = typeof args === "string" ? args : "";
+      const selected = selectProviderConfigs(configs, selector);
+      if (selected.length === 0) {
+        ctx.ui.notify(`Unknown OpenAI-compatible provider ${JSON.stringify(selector.trim())}. Use an instance key or provider ID.`, "error");
+        return;
+      }
+      // Per-provider discovery still applies its own timeout. This aggregate
+      // deadline prevents a command from waiting forever if a provider adapter
+      // fails to honor its signal.
+      const signal = AbortSignal.timeout(Math.max(...selected.map((config) => config.timeoutMs), 1_000));
       const result = await ctx.modelRegistry.refresh({
-        providers: [PROVIDER_ID],
+        providers: selected.map((config) => config.providerId),
         allowNetwork: true,
         force: true,
         signal,
       });
-      const error = result.errors.get(PROVIDER_ID);
-      if (error) {
-        ctx.ui.notify(`Could not refresh ${PROVIDER_ID}: ${error.message}`, "error");
-        return;
+      const messages: string[] = [];
+      for (const config of selected) {
+        const error = result.errors.get(config.providerId);
+        if (error) {
+          messages.push(`${config.displayName} (${config.providerId}): error ${error.message}`);
+          continue;
+        }
+        const count = ctx.modelRegistry.getAll().filter((model) => model.provider === config.providerId).length;
+        messages.push(`${config.displayName} (${config.providerId}): ${count} model${count === 1 ? "" : "s"} from ${modelsEndpoint(config.baseUrl)}`);
       }
-      if (result.aborted) {
-        ctx.ui.notify(`Refreshing ${PROVIDER_ID} was cancelled.`, "warning");
-        return;
-      }
-      const count = ctx.modelRegistry.getAll().filter((model) => model.provider === PROVIDER_ID).length;
-      ctx.ui.notify(`Loaded ${count} model${count === 1 ? "" : "s"} from ${modelsEndpoint(config.baseUrl)}.`, "info");
+      ctx.ui.notify(messages.join("; "), result.aborted ? "warning" : messages.some((message) => message.includes(": error ")) ? "error" : "info");
     },
   });
 }
@@ -256,8 +285,12 @@ function registerRefreshCommand(pi: ExtensionAPI, config: EnvironmentConfig): vo
  * `pi --list-models`.
  */
 export default async function (pi: ExtensionAPI): Promise<void> {
-  const config = readEnvironmentConfig();
-  const initialModels = await discoverInitialModels(config);
-  pi.registerProvider(createOpenAICompatibleProvider(config, initialModels));
-  registerRefreshCommand(pi, config);
+  const configs = readEnvironmentConfigs();
+  const discoveries = await Promise.allSettled(configs.map((config) => discoverInitialModels(config)));
+  for (let index = 0; index < configs.length; index += 1) {
+    const result = discoveries[index];
+    const initialModels = result?.status === "fulfilled" ? result.value : [];
+    pi.registerProvider(createOpenAICompatibleProvider(configs[index]!, initialModels));
+  }
+  registerRefreshCommand(pi, configs);
 }

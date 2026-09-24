@@ -10,20 +10,11 @@ export type OpenAICompatibleApi = "openai-completions" | "openai-responses";
 export type ApiMode = OpenAICompatibleApi | "auto";
 export type ModelInput = "text" | "image";
 
-export const DEFAULT_REQUESTY_BASE_URL = "https://router.eu.requesty.ai/v1";
 export const DEFAULT_API: ApiMode = "openai-completions";
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const DEFAULT_MAX_TOKENS = 16_384;
 export const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
-
-/** Environment variables checked in order for the provider API key. */
-export const API_KEY_ENV_VARS = [
-  "PI_CUSTOM_PROVIDER_API_KEY",
-  "OPENAI_COMPATIBLE_API_KEY",
-  "REQUESTY_API_KEY",
-  "CUSTOM_PROVIDER_API_KEY",
-  "CUSTOM_OPENAI_API_KEY",
-] as const;
+export const PROVIDERS_ENV_VAR = "OPENAI_COMPATIBLE_PROVIDERS";
 
 export interface ModelCostTier {
   inputTokensAbove: number;
@@ -281,16 +272,15 @@ export function modelsEndpoint(baseUrl: string): string {
   return `${normalizeBaseUrl(baseUrl)}/models`;
 }
 
-function configuredBaseUrl(env: Record<string, string | undefined>): string {
-  const value = [
-    env.PI_CUSTOM_PROVIDER_BASE_URL,
-    env.OPENAI_COMPATIBLE_BASE_URL,
-    env.CUSTOM_PROVIDER_BASE_URL,
-    env.CUSTOM_OPENAI_BASE_URL,
-    env.REQUESTY_BASE_URL,
-    env.OPENAI_BASE_URL,
-  ].find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
-  return normalizeBaseUrl(value ?? DEFAULT_REQUESTY_BASE_URL);
+function scopedName(key: string, field: string): string {
+  return `OPENAI_COMPATIBLE_${key.toUpperCase()}_${field}`;
+}
+
+function requireScopedBaseUrl(env: Record<string, string | undefined>, key: string): string {
+  const name = scopedName(key, "BASE_URL");
+  const value = env[name];
+  if (!value?.trim()) throw new Error(`Missing ${name} for OpenAI-compatible provider ${JSON.stringify(key)}.`);
+  return normalizeBaseUrl(value);
 }
 
 export interface EnvironmentConfig {
@@ -303,6 +293,27 @@ export interface EnvironmentConfig {
   defaultReasoning: boolean;
   defaultInput: ModelInput[];
   inferCapabilities: boolean;
+  debug?: boolean;
+}
+
+/** Configuration and identity for one independent upstream instance. */
+export interface ProviderEnvironmentConfig extends EnvironmentConfig {
+  /** Stable key declared in OPENAI_COMPATIBLE_PROVIDERS. */
+  instanceKey: string;
+  /** Provider registry, selector, credential, and model-store identity. */
+  providerId: string;
+  /** Human-facing label shown by Pi. */
+  displayName: string;
+  /** Environment variables Pi should consult for runtime credentials. */
+  apiKeyEnvVars: readonly string[];
+  /** Explicit NAME value, retained so collisions can be validated precisely. */
+  explicitName?: string;
+}
+
+export interface ProviderIdentity {
+  instanceKey: string;
+  providerId: string;
+  displayName: string;
 }
 
 function envNumber(env: Record<string, string | undefined>, names: readonly string[], fallback: number): number {
@@ -323,9 +334,9 @@ function envBoolean(env: Record<string, string | undefined>, names: readonly str
   return fallback;
 }
 
-function envInput(env: Record<string, string | undefined>): ModelInput[] {
+function envInput(env: Record<string, string | undefined>, names: readonly string[]): ModelInput[] {
   const values = stringsFromValue(
-    env.OPENAI_COMPATIBLE_DEFAULT_INPUT ?? env.CUSTOM_PROVIDER_DEFAULT_INPUT,
+    names.map((name) => env[name]).find((value) => value?.trim()),
   ).map((value) => value.toLowerCase());
   const result: ModelInput[] = ["text"];
   if (values.includes("image") || values.includes("images") || values.includes("vision")) result.push("image");
@@ -340,50 +351,144 @@ function runtimeEnvironment(): Record<string, string | undefined> {
   return processLike?.env ?? {};
 }
 
-export function readEnvironmentConfig(env: Record<string, string | undefined> = runtimeEnvironment()): EnvironmentConfig {
-  const apiKey = API_KEY_ENV_VARS.map((name) => env[name]).find(
+function firstEnvironmentValue(
+  env: Record<string, string | undefined>,
+  names: readonly string[],
+): string | undefined {
+  return names.map((name) => env[name]).find(
     (value): value is string => typeof value === "string" && value.trim().length > 0,
   );
+}
+
+function configForInstance(
+  env: Record<string, string | undefined>,
+  instanceKey: string,
+): EnvironmentConfig {
+  const field = (name: string): string => scopedName(instanceKey, name);
   return {
-    baseUrl: configuredBaseUrl(env),
-    api: parseApiMode(
-      env.PI_CUSTOM_PROVIDER_API ??
-        env.OPENAI_COMPATIBLE_API ??
-        env.CUSTOM_PROVIDER_API ??
-        env.REQUESTY_API,
-    ),
-    apiKey,
-    timeoutMs: envNumber(
-      env,
-      ["PI_CUSTOM_PROVIDER_MODEL_TIMEOUT_MS", "OPENAI_COMPATIBLE_MODEL_TIMEOUT_MS"],
-      DEFAULT_DISCOVERY_TIMEOUT_MS,
-    ),
-    defaultContextWindow: Math.floor(
-      envNumber(
-        env,
-        ["PI_CUSTOM_PROVIDER_CONTEXT_WINDOW", "OPENAI_COMPATIBLE_CONTEXT_WINDOW"],
-        DEFAULT_CONTEXT_WINDOW,
-      ),
-    ),
-    defaultMaxTokens: Math.floor(
-      envNumber(
-        env,
-        ["PI_CUSTOM_PROVIDER_MAX_TOKENS", "OPENAI_COMPATIBLE_MAX_TOKENS"],
-        DEFAULT_MAX_TOKENS,
-      ),
-    ),
-    defaultReasoning: envBoolean(
-      env,
-      ["PI_CUSTOM_PROVIDER_DEFAULT_REASONING", "OPENAI_COMPATIBLE_DEFAULT_REASONING"],
-      false,
-    ),
-    defaultInput: envInput(env),
-    inferCapabilities: envBoolean(
-      env,
-      ["PI_CUSTOM_PROVIDER_INFER_CAPABILITIES", "OPENAI_COMPATIBLE_INFER_CAPABILITIES"],
-      true,
-    ),
+    baseUrl: requireScopedBaseUrl(env, instanceKey),
+    api: parseApiMode(firstEnvironmentValue(env, [field("API")])),
+    apiKey: firstEnvironmentValue(env, [field("API_KEY")]),
+    timeoutMs: envNumber(env, [field("MODEL_TIMEOUT_MS")], DEFAULT_DISCOVERY_TIMEOUT_MS),
+    defaultContextWindow: Math.floor(envNumber(env, [field("CONTEXT_WINDOW")], DEFAULT_CONTEXT_WINDOW)),
+    defaultMaxTokens: Math.floor(envNumber(env, [field("MAX_TOKENS")], DEFAULT_MAX_TOKENS)),
+    defaultReasoning: envBoolean(env, [field("DEFAULT_REASONING")], false),
+    defaultInput: envInput(env, [field("DEFAULT_INPUT")]),
+    inferCapabilities: envBoolean(env, [field("INFER_CAPABILITIES")], true),
+    debug: envBoolean(env, [field("DEBUG")], false),
   };
+}
+
+function normalizeInstanceKey(value: string): string {
+  const key = value.trim().toLowerCase();
+  if (!key) throw new Error("OPENAI_COMPATIBLE_PROVIDERS contains an empty provider key.");
+  if (!/^[a-z0-9_-]+$/u.test(key)) {
+    throw new Error(`Invalid OpenAI-compatible provider key ${JSON.stringify(value.trim())}: use only letters, numbers, _ or -.`);
+  }
+  return key;
+}
+
+function validateDisplayName(value: string, key: string): string {
+  const name = value.trim();
+  if (!name || name.length > 200 || /[\u0000-\u001f\u007f]/u.test(name)) {
+    throw new Error(`Invalid NAME for OpenAI-compatible provider ${JSON.stringify(key)}.`);
+  }
+  return name;
+}
+
+export function providerIdForInstance(instanceKey: string): string {
+  return `openai-compatible-${normalizeInstanceKey(instanceKey)}`;
+}
+
+export function displayNameFromBaseUrl(baseUrl: string): string {
+  const url = new URL(normalizeBaseUrl(baseUrl));
+  const path = url.pathname.replace(/\/+$/u, "").replace(/\/v1$/iu, "");
+  return `${url.hostname}${url.port ? `:${url.port}` : ""}${path && path !== "/" ? path : ""}`;
+}
+
+export function providerIdentity(
+  instanceKey: string,
+  baseUrl: string,
+  explicitName?: string,
+): ProviderIdentity {
+  const key = normalizeInstanceKey(instanceKey);
+  return {
+    instanceKey: key,
+    providerId: providerIdForInstance(key),
+    displayName: explicitName !== undefined
+      ? validateDisplayName(explicitName, key)
+      : displayNameFromBaseUrl(baseUrl),
+  };
+}
+
+function parseProviderKeys(raw: string): string[] {
+  const keys = raw.split(",").map(normalizeInstanceKey);
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (seen.has(key)) throw new Error(`Duplicate OpenAI-compatible provider key ${JSON.stringify(key)}.`);
+    seen.add(key);
+  }
+  return keys;
+}
+
+function disambiguateProviderNames(configs: ProviderEnvironmentConfig[]): ProviderEnvironmentConfig[] {
+  const explicit = new Map<string, string>();
+  for (const config of configs) {
+    if (config.explicitName) {
+      const prior = explicit.get(config.explicitName);
+      if (prior) throw new Error(`Duplicate display NAME ${JSON.stringify(config.explicitName)} for providers ${JSON.stringify(prior)} and ${JSON.stringify(config.instanceKey)}.`);
+      explicit.set(config.explicitName, config.instanceKey);
+    }
+  }
+  const derivedCounts = new Map<string, number>();
+  for (const config of configs) {
+    if (!config.explicitName) derivedCounts.set(config.displayName, (derivedCounts.get(config.displayName) ?? 0) + 1);
+  }
+  return configs.map((config) => {
+    if (config.explicitName) return config;
+    if ((derivedCounts.get(config.displayName) ?? 0) < 2 && !explicit.has(config.displayName)) return config;
+    return { ...config, displayName: `${config.displayName} (${config.instanceKey})` };
+  });
+}
+
+/** Read the configured upstream instances in declaration order. */
+export function readEnvironmentConfigs(
+  env: Record<string, string | undefined> = runtimeEnvironment(),
+): ProviderEnvironmentConfig[] {
+  const raw = env[PROVIDERS_ENV_VAR];
+  if (typeof raw !== "string") {
+    throw new Error(`${PROVIDERS_ENV_VAR} is required and must contain at least one provider key.`);
+  }
+  const keys = parseProviderKeys(raw);
+  if (keys.length === 0) throw new Error(`${PROVIDERS_ENV_VAR} must contain at least one provider key.`);
+  const configs = keys.map((key) => {
+    try {
+      const config = configForInstance(env, key);
+      const rawName = env[scopedName(key, "NAME")];
+      const explicit = rawName === undefined ? undefined : validateDisplayName(rawName, key);
+      return {
+        ...config,
+        ...providerIdentity(key, config.baseUrl, explicit),
+        apiKeyEnvVars: [scopedName(key, "API_KEY")],
+        ...(explicit ? { explicitName: explicit } : {}),
+      } satisfies ProviderEnvironmentConfig;
+    } catch (error) {
+      throw new Error(
+        `Invalid configuration for OpenAI-compatible provider ${JSON.stringify(key)}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  });
+  const resolved = disambiguateProviderNames(configs);
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const config of resolved) {
+    if (ids.has(config.providerId)) throw new Error(`Duplicate provider ID ${JSON.stringify(config.providerId)}.`);
+    if (names.has(config.displayName)) throw new Error(`Duplicate provider display name ${JSON.stringify(config.displayName)}.`);
+    ids.add(config.providerId);
+    names.add(config.displayName);
+  }
+  return resolved;
 }
 
 function fallbackApi(api: ApiMode): OpenAICompatibleApi {
@@ -766,7 +871,10 @@ export function isOffline(env: Record<string, string | undefined> = runtimeEnvir
   return value === "1" || value === "true" || value === "yes";
 }
 
-export function isDebugEnabled(env: Record<string, string | undefined> = runtimeEnvironment()): boolean {
-  const value = env.PI_CUSTOM_PROVIDER_DEBUG?.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes";
+export function isDebugEnabled(
+  env: Record<string, string | undefined> = runtimeEnvironment(),
+  instanceKey?: string,
+): boolean {
+  if (!instanceKey) return false;
+  return envBoolean(env, [scopedName(normalizeInstanceKey(instanceKey), "DEBUG")], false);
 }
