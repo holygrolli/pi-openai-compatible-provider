@@ -37,8 +37,7 @@ pi -e git:github.com/holygrolli/pi-openai-compatible-provider@v0.1.0
 
 Replace `v0.1.0` with a later release tag to upgrade a pinned installation.
 Review extension source before installing it: Pi extensions run with the full
-permissions of the Pi process. This package requires Node.js `>=22.19.0` and a
-compatible Pi installation.
+permissions of the Pi process. This package requires Node.js `>=22.19.0` and Pi `>=1.0.0`.
 
 ## Development and releases
 
