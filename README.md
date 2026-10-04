@@ -240,8 +240,11 @@ also understands common metadata from Requesty and LiteLLM, including:
 - `supports_vision` / input modalities;
 - `supports_reasoning` and `supported_parameters`;
 - `supports_role_developer`;
-- Requesty's tiered `pricing` entries (per-token prices are converted to Pi's
-  dollars-per-million-token rates).
+- Requesty's tiered `pricing` entries and LiteLLM `model_info` pricing fields
+  such as `input_cost_per_token`, `output_cost_per_token`,
+  `cache_read_input_token_cost`, and `cache_creation_input_token_cost` (per-token
+  prices are converted to Pi's dollars-per-million-token rates, including
+  long-context `*_above_<N>k_tokens` tiers).
 
 Unknown or malformed model records are ignored, duplicate IDs are removed, and
 all HTTP errors are surfaced without including the API key.

@@ -145,6 +145,42 @@ test("maps Requesty model metadata, capabilities, and tiered pricing", () => {
   assert.equal(model.compat?.supportsStore, false);
 });
 
+test("maps LiteLLM model_info per-token pricing and long-context tiers", () => {
+  const [model] = parseModelCatalog(
+    {
+      data: [
+        {
+          id: "gpt-compatible",
+          model_info: {
+            input_cost_per_token: 0.000003,
+            output_cost_per_token: 0.000015,
+            cache_read_input_token_cost: 0.0000003,
+            cache_creation_input_token_cost: 0.00000375,
+            input_cost_per_token_above_200k_tokens: 0.000006,
+            output_cost_per_token_above_200k_tokens: 0.0000225,
+            cache_read_input_token_cost_above_200k_tokens: 0.0000006,
+            cache_creation_input_token_cost_above_200k_tokens: 0.0000075,
+          },
+        },
+      ],
+    },
+    { baseUrl: "https://gateway.example", api: "openai-completions" },
+  );
+  assert.deepEqual(model?.cost, {
+    input: 3,
+    output: 15,
+    cacheRead: 0.3,
+    cacheWrite: 3.75,
+    tiers: [{
+      inputTokensAbove: 200000,
+      input: 6,
+      output: 22.5,
+      cacheRead: 0.6,
+      cacheWrite: 7.5,
+    }],
+  });
+});
+
 test("supports mixed/Responses selection and conservative defaults", () => {
   const models = parseModelCatalog(
     {

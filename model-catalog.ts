@@ -603,34 +603,157 @@ function ratePerMillion(record: UnknownRecord, perMillionPaths: readonly string[
   return perToken === undefined ? undefined : perToken * 1_000_000;
 }
 
-function extractPricingRates(record: UnknownRecord, previous: ModelCost): ModelCost {
+function tieredRatePaths(field: string, threshold: number): string[] {
+  const thresholdK = Math.round(threshold / 1_000);
+  const thresholdCompact = String(Math.round(threshold));
+  return [
+    `${field}_above_${thresholdCompact}_tokens`,
+    `${field}_above_${thresholdK}k_tokens`,
+    `model_info.${field}_above_${thresholdCompact}_tokens`,
+    `model_info.${field}_above_${thresholdK}k_tokens`,
+  ];
+}
+
+function extractTierThreshold(record: UnknownRecord): number {
+  return Math.max(
+    0,
+    numberValue(record, [
+      "prompt_tokens_threshold",
+      "input_tokens_above",
+      "inputTokensAbove",
+      "threshold",
+      "model_info.prompt_tokens_threshold",
+      "model_info.input_tokens_above",
+      "model_info.inputTokensAbove",
+      "model_info.threshold",
+    ]) ?? 0,
+  );
+}
+
+function extractPricingRates(record: UnknownRecord, previous: ModelCost, threshold = 0): ModelCost {
   const input =
     ratePerMillion(
       record,
-      ["input_per_million", "input_price_per_million", "inputPricePerMillion", "prompt_per_million"],
-      ["input_price", "prompt_price", "input_cost_per_token", "prompt_cost_per_token", "prompt"],
+      [
+        ...(threshold > 0 ? tieredRatePaths("input_per_million", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("input_cost_per_million", threshold) : []),
+        "input_per_million",
+        "input_price_per_million",
+        "inputPricePerMillion",
+        "prompt_per_million",
+        "model_info.input_per_million",
+        "model_info.input_price_per_million",
+        "model_info.inputPricePerMillion",
+        "model_info.prompt_per_million",
+      ],
+      [
+        ...(threshold > 0 ? tieredRatePaths("input_per_token", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("input_cost_per_token", threshold) : []),
+        "input_price",
+        "prompt_price",
+        "input_cost_per_token",
+        "prompt_cost_per_token",
+        "prompt",
+        "model_info.input_price",
+        "model_info.prompt_price",
+        "model_info.input_cost_per_token",
+        "model_info.prompt_cost_per_token",
+        "model_info.prompt",
+      ],
     ) ?? previous.input;
   const output =
     ratePerMillion(
       record,
-      ["output_per_million", "output_price_per_million", "outputPricePerMillion", "completion_per_million"],
-      ["output_price", "completion_price", "output_cost_per_token", "completion_cost_per_token", "completion"],
+      [
+        ...(threshold > 0 ? tieredRatePaths("output_per_million", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("output_cost_per_million", threshold) : []),
+        "output_per_million",
+        "output_price_per_million",
+        "outputPricePerMillion",
+        "completion_per_million",
+        "model_info.output_per_million",
+        "model_info.output_price_per_million",
+        "model_info.outputPricePerMillion",
+        "model_info.completion_per_million",
+      ],
+      [
+        ...(threshold > 0 ? tieredRatePaths("output_per_token", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("output_cost_per_token", threshold) : []),
+        "output_price",
+        "completion_price",
+        "output_cost_per_token",
+        "completion_cost_per_token",
+        "completion",
+        "model_info.output_price",
+        "model_info.completion_price",
+        "model_info.output_cost_per_token",
+        "model_info.completion_cost_per_token",
+        "model_info.completion",
+      ],
     ) ?? previous.output;
   const cacheRead =
     ratePerMillion(
       record,
-      ["cache_read_per_million", "cached_per_million", "cacheReadPerMillion"],
-      ["cached_price", "cache_read_price", "cache_read_cost_per_token"],
+      [
+        ...(threshold > 0 ? tieredRatePaths("cache_read_per_million", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("cache_read_input_token_cost_per_million", threshold) : []),
+        "cache_read_per_million",
+        "cached_per_million",
+        "cacheReadPerMillion",
+        "model_info.cache_read_per_million",
+        "model_info.cached_per_million",
+        "model_info.cacheReadPerMillion",
+      ],
+      [
+        ...(threshold > 0 ? tieredRatePaths("cache_read_per_token", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("cache_read_input_token_cost", threshold) : []),
+        "cached_price",
+        "cache_read_price",
+        "cache_read_cost_per_token",
+        "cache_read_input_token_cost",
+        "model_info.cached_price",
+        "model_info.cache_read_price",
+        "model_info.cache_read_cost_per_token",
+        "model_info.cache_read_input_token_cost",
+      ],
     ) ?? previous.cacheRead;
   const cacheWrite =
     ratePerMillion(
       record,
-      ["cache_write_per_million", "caching_per_million", "cacheWritePerMillion"],
-      ["caching_price", "caching_5m_price", "cache_write_price", "cache_write_cost_per_token"],
+      [
+        ...(threshold > 0 ? tieredRatePaths("cache_write_per_million", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("cache_creation_input_token_cost_per_million", threshold) : []),
+        "cache_write_per_million",
+        "caching_per_million",
+        "cacheWritePerMillion",
+        "model_info.cache_write_per_million",
+        "model_info.caching_per_million",
+        "model_info.cacheWritePerMillion",
+      ],
+      [
+        ...(threshold > 0 ? tieredRatePaths("cache_write_per_token", threshold) : []),
+        ...(threshold > 0 ? tieredRatePaths("cache_creation_input_token_cost", threshold) : []),
+        "caching_price",
+        "caching_5m_price",
+        "cache_write_price",
+        "cache_write_cost_per_token",
+        "cache_creation_input_token_cost",
+        "model_info.caching_price",
+        "model_info.caching_5m_price",
+        "model_info.cache_write_price",
+        "model_info.cache_write_cost_per_token",
+        "model_info.cache_creation_input_token_cost",
+      ],
     ) ?? previous.cacheWrite;
   return { input, output, cacheRead, cacheWrite };
 }
 
+/**
+ * Model APIs are inconsistent about pricing units. Pi expects dollars per
+ * million tokens, while Requesty/LiteLLM-style metadata generally reports
+ * dollars per token. Keep explicit `cost.input` fields in Pi's native units,
+ * but normalize prompt/completion and *_cost_per_token fields here.
+ */
 function parseCosts(record: UnknownRecord): ModelCost {
   const zero: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const pricing = firstValue(record, ["pricing", "prices"]);
@@ -647,11 +770,8 @@ function parseCosts(record: UnknownRecord): ModelCost {
     let current = zero;
     const tiers: ModelCostTier[] = [];
     for (const entry of sorted) {
-      current = extractPricingRates(entry, current);
-      const threshold = Math.max(
-        0,
-        numberValue(entry, ["prompt_tokens_threshold", "input_tokens_above", "inputTokensAbove", "threshold"]) ?? 0,
-      );
+      const threshold = extractTierThreshold(entry);
+      current = extractPricingRates(entry, current, threshold);
       if (threshold === 0) {
         // The first zero-threshold Requesty entry is the base price.
         continue;
@@ -661,23 +781,54 @@ function parseCosts(record: UnknownRecord): ModelCost {
     // If a provider omitted a zero-threshold entry, use the lowest tier as the
     // base and retain only the later tiers.
     const baseEntry = sorted.find(
-      (entry) =>
-        (numberValue(entry, ["prompt_tokens_threshold", "input_tokens_above", "inputTokensAbove", "threshold"]) ?? 0) === 0,
+      (entry) => extractTierThreshold(entry) === 0,
     );
     const base = baseEntry ? extractPricingRates(baseEntry, zero) : extractPricingRates(sorted[0]!, zero);
     return tiers.length > 0 ? { ...base, tiers } : base;
   }
 
-  const direct = asRecord(firstValue(record, ["cost", "pricing"]));
-  if (direct) {
-    const input = parseRate(firstValue(direct, ["input", "prompt"])) ?? 0;
-    const output = parseRate(firstValue(direct, ["output", "completion"])) ?? 0;
-    const cacheRead = parseRate(firstValue(direct, ["cacheRead", "cache_read", "cached"])) ?? 0;
-    const cacheWrite = parseRate(firstValue(direct, ["cacheWrite", "cache_write", "caching"])) ?? 0;
-    return { input, output, cacheRead, cacheWrite };
+  // `cost` is already documented as Pi's $/million-token shape. Preserve that
+  // interpretation for backwards compatibility with custom-compatible APIs.
+  const directCost = asRecord(firstValue(record, ["cost"]));
+  if (directCost) {
+    const inferred = extractPricingRates(directCost, zero);
+    return {
+      input: parseRate(firstValue(directCost, ["input", "prompt"])) ?? inferred.input,
+      output: parseRate(firstValue(directCost, ["output", "completion"])) ?? inferred.output,
+      cacheRead: parseRate(firstValue(directCost, ["cacheRead", "cache_read", "cached"])) ?? inferred.cacheRead,
+      cacheWrite: parseRate(firstValue(directCost, ["cacheWrite", "cache_write", "caching"])) ?? inferred.cacheWrite,
+    };
   }
 
-  return zero;
+  // LiteLLM commonly nests input_cost_per_token/output_cost_per_token under
+  // model_info. A pricing object with prompt/completion uses the same
+  // per-token convention; normalize both to Pi's native units.
+  let inferred = extractPricingRates(record, zero);
+  const pricingObject = asRecord(pricing);
+  if (pricingObject) inferred = extractPricingRates(pricingObject, inferred);
+
+  const sources = [record, asRecord(record.model_info), pricingObject].filter(
+    (source): source is UnknownRecord => source !== undefined,
+  );
+  const thresholds = new Set<number>();
+  for (const source of sources) {
+    for (const key of Object.keys(source)) {
+      const match = /(?:above_)(\d+)(k)?_tokens$/u.exec(key);
+      if (!match) continue;
+      const threshold = Number(match[1]) * (match[2] ? 1_000 : 1);
+      if (Number.isFinite(threshold) && threshold > 0) thresholds.add(threshold);
+    }
+  }
+  if (thresholds.size > 0) {
+    const tiers = [...thresholds]
+      .sort((left, right) => left - right)
+      .map((inputTokensAbove) => ({
+        inputTokensAbove,
+        ...extractPricingRates(asRecord(record.model_info) ?? record, inferred, inputTokensAbove),
+      }));
+    return { ...inferred, tiers };
+  }
+  return inferred;
 }
 
 function parseCompat(record: UnknownRecord, reasoning: boolean): DiscoveredModelCompat {
