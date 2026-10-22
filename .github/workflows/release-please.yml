@@ -64,7 +64,7 @@ jobs:
           npm test
           npm run check
           npm run check:package
-          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.3
+          npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.0.0
           PI_OFFLINE=1 pi -e . --list-models
           package_file="$(npm pack --silent)"
           sha256sum "$package_file" > "$package_file.sha256"

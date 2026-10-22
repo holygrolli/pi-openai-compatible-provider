@@ -46,7 +46,7 @@ jobs:
         run: npm run check:package
 
       - name: Install Pi smoke-test CLI
-        run: npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.3
+        run: npm install --global --ignore-scripts @earendil-works/pi-coding-agent@1.0.0
 
       - name: Verify Pi manifest and offline loading
         env:
